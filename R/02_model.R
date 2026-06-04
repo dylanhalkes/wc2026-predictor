@@ -1,58 +1,39 @@
 # ============================================================
 #  World Cup 2026 Predictor
-#  Step 2: Poisson Goals Model
+#  Step 2: Poisson Goals Model  (v2 - with Elo ratings)
 # ============================================================
 #
-#  We model goals scored as Poisson distributed with a log-linear mean:
+#  Model: log(lambda_ij) = mu + alpha_i + beta_j + gamma*home + delta*elo_diff
 #
-#    log(λ_ij) = μ + α_i + β_j + γ * home_i
-#
-#  where:
-#    λ_ij = expected goals for team i against team j
-#    μ    = intercept (log of baseline goal rate)
-#    α_i  = attack strength of team i  (higher → scores more)
-#    β_j  = defensive weakness of team j  (higher → concedes more)
-#    γ    = home advantage coefficient
-#
-#  Goals ~ Poisson(λ_ij), fitted as a weighted GLM.
-#  All parameters are relative to a reference team (first alphabetically),
-#  whose attack and defence are fixed at 0 for identifiability.
-#
-#  Reference: Dixon & Coles (1997), Applied Statistics, 46(2), 265–280.
+#  elo_diff = (team_elo - opp_elo) / 100  at the year before the match.
+#  Non-WC opponents use median Elo (elo_diff ~= 0 for those matches).
+#  delta tells us: per 100 Elo point advantage, how many more goals
+#  are expected, over and above what the fixed effects already capture?
 # ============================================================
 
 library(tidyverse)
 library(broom)
 
-# Create plots directory if it doesn't exist
 dir.create("plots", showWarnings = FALSE)
 
 # ── 1. LOAD DATA ─────────────────────────────────────────────────────────────
 
-model_data <- read_csv("data/model_data.csv") %>%
+model_data <- read_csv("data/model_data.csv", show_col_types = FALSE) %>%
   mutate(
     team     = factor(team),
     opponent = factor(opponent),
     is_home  = as.numeric(is_home)
   )
 
-cat("── Data loaded ──\n")
-cat("Rows:         ", nrow(model_data), "\n")
-cat("Unique teams: ", nlevels(model_data$team), "\n")
-cat("Reference team (α = β = 0):", levels(model_data$team)[1], "\n\n")
+cat("Loaded:", nrow(model_data), "rows |", nlevels(model_data$team), "teams\n")
+cat("elo_diff column present:", "elo_diff" %in% colnames(model_data), "\n\n")
 
-# ── 2. FIT POISSON GLM ───────────────────────────────────────────────────────
-#
-#  glm() with family = poisson(link = "log") fits the model above.
-#  observations are weighted by total_weight (match type × time decay).
-#
-#  This produces ~560 parameters (attack + defence for ~280 teams).
-#  Expect a few seconds to run.
+# ── 2. FIT POISSON GLM WITH ELO ──────────────────────────────────────────────
 
-cat("Fitting Poisson model — this may take a moment...\n")
+cat("Fitting Poisson model with Elo predictor...\n")
 
 poisson_model <- glm(
-  goals ~ team + opponent + is_home,
+  goals ~ team + opponent + is_home + elo_diff,
   data    = model_data,
   family  = poisson(link = "log"),
   weights = total_weight
@@ -60,270 +41,137 @@ poisson_model <- glm(
 
 cat("Done.\n\n")
 
-# ── 3. MODEL DIAGNOSTICS ─────────────────────────────────────────────────────
+# ── 3. DIAGNOSTICS ───────────────────────────────────────────────────────────
 
-cat("── Model diagnostics ──\n")
-cat("Null deviance:     ", round(poisson_model$null.deviance, 1),
-    " (df =", poisson_model$df.null, ")\n")
-cat("Residual deviance: ", round(poisson_model$deviance, 1),
-    " (df =", poisson_model$df.residual, ")\n")
-cat("AIC:               ", round(AIC(poisson_model), 1), "\n")
+cat("── Diagnostics ──\n")
+cat("Residual deviance:", round(poisson_model$deviance, 1),
+    "| AIC:", round(AIC(poisson_model), 1), "\n")
+cat("Dispersion:",
+    round(poisson_model$deviance / poisson_model$df.residual, 3), "\n\n")
 
-# Dispersion check: residual deviance / df should be ~1 for a well-fitting
-# Poisson model. Values >1 indicate overdispersion (common in football data).
-dispersion <- poisson_model$deviance / poisson_model$df.residual
-cat("Dispersion:        ", round(dispersion, 3),
-    ifelse(dispersion > 1.5, " ← some overdispersion (expected)\n", " ← good\n"))
-
-# ── 4. EXTRACT PARAMETERS ────────────────────────────────────────────────────
+# ── 4. EXTRACT COEFFICIENTS ──────────────────────────────────────────────────
 
 coefs <- tidy(poisson_model)
 
-# Global scalars
 intercept <- coefs %>% filter(term == "(Intercept)") %>% pull(estimate)
 home_adv  <- coefs %>% filter(term == "is_home")     %>% pull(estimate)
+elo_coef  <- coefs %>% filter(term == "elo_diff")    %>% pull(estimate)
 
-cat("\n── Key scalars ──\n")
-cat("Intercept μ:          ", round(intercept, 4), "\n")
-cat("Baseline goals exp(μ):", round(exp(intercept), 3),
-    "(goals per match for reference-vs-reference)\n")
-cat("Home advantage γ:     ", round(home_adv, 4), "\n")
-cat("Home advantage exp(γ):", round(exp(home_adv), 3),
-    "× goal multiplier at home\n\n")
+cat("── Key coefficients ──\n")
+cat("Intercept mu:               ", round(intercept, 4), "\n")
+cat("Home advantage exp(gamma):  ", round(exp(home_adv), 3), "x\n")
+cat("Elo coefficient delta:      ", round(elo_coef, 4), "\n")
+cat("Interpretation: per 100 Elo point advantage,",
+    round((exp(elo_coef) - 1) * 100, 1), "% more expected goals\n\n")
 
-# Attack parameters: team_X coefficient → α_X
+# ── 5. EXTRACT TEAM PARAMETERS ───────────────────────────────────────────────
+
 attack_params <- coefs %>%
   filter(str_starts(term, "team")) %>%
-  transmute(
-    team   = str_remove(term, "^team"),
-    attack = estimate
-  )
+  transmute(team = str_remove(term, "^team"), attack = estimate)
 
-# Defence parameters: opponent_X coefficient → β_X
-# IMPORTANT: β_X is the DEFENSIVE WEAKNESS of team X:
-#   high β_X → easy to score against (weak defence)
-#   low β_X  → hard to score against (strong defence)
 defence_params <- coefs %>%
   filter(str_starts(term, "opponent")) %>%
-  transmute(
-    team    = str_remove(term, "^opponent"),
-    defence = estimate
-  )
-
-# ── 5. ASSEMBLE TEAM PARAMETERS ──────────────────────────────────────────────
+  transmute(team = str_remove(term, "^opponent"), defence = estimate)
 
 ref_team <- levels(model_data$team)[1]
 
 team_params <- full_join(attack_params, defence_params, by = "team") %>%
   bind_rows(tibble(team = ref_team, attack = 0, defence = 0)) %>%
   mutate(
-    attack   = replace_na(attack, 0),
+    attack   = replace_na(attack,  0),
     defence  = replace_na(defence, 0),
-    # Overall strength: good attack (high α) + strong defence (low β)
     strength = attack - defence
   ) %>%
   arrange(desc(strength))
 
-cat("── Top 20 teams by overall strength ──\n")
+cat("── Top 15 teams by overall strength ──\n")
 team_params %>%
   select(team, attack, defence, strength) %>%
-  head(20) %>%
+  head(15) %>%
   mutate(across(where(is.numeric), ~round(.x, 3))) %>%
   print()
 
-# ── 6. EXPECTED GOALS FUNCTION ───────────────────────────────────────────────
-#
-#  For a match between team_a and team_b:
-#    λ_a = exp(μ + α_a + β_b + γ * home_a)
-#    λ_b = exp(μ + α_b + β_a + γ * home_b)
-#
-#  For World Cup matches: home_a = home_b = FALSE (neutral ground)
-#  Exception: USA, Canada, Mexico may have a small home advantage.
+# ── 6. ADD CURRENT ELO TO WC TEAM PARAMS ────────────────────────────────────
 
-expected_goals <- function(team_a, team_b,
-                           home_a = FALSE, home_b = FALSE) {
-  a <- team_params %>% filter(team == team_a)
-  b <- team_params %>% filter(team == team_b)
+wc_teams   <- read_csv("data/wc_teams.csv",   show_col_types = FALSE)
+current_elo <- read_csv("data/current_elo.csv", show_col_types = FALSE)
 
-  if (nrow(a) == 0) stop(paste("Team not found:", team_a))
-  if (nrow(b) == 0) stop(paste("Team not found:", team_b))
+wc_params <- wc_teams %>%
+  left_join(team_params %>% select(team, attack, defence, strength), by = "team") %>%
+  left_join(current_elo, by = "team") %>%
+  arrange(group, team)
 
-  lambda_a <- exp(intercept + a$attack + b$defence + home_adv * home_a)
-  lambda_b <- exp(intercept + b$attack + a$defence + home_adv * home_b)
+missing_params <- wc_params %>% filter(is.na(attack)) %>% pull(team)
+missing_elo    <- wc_params %>% filter(is.na(current_elo)) %>% pull(team)
 
-  tibble(
-    team_a   = team_a,
-    team_b   = team_b,
-    xg_a     = round(lambda_a, 3),
-    xg_b     = round(lambda_b, 3)
-  )
+if (length(missing_params) > 0)
+  cat("WARNING - missing model params:", paste(missing_params, collapse = ", "), "\n")
+if (length(missing_elo) > 0) {
+  cat("Teams with no current Elo (check name):", paste(missing_elo, collapse = ", "), "\n")
+  median_elo <- median(wc_params$current_elo, na.rm = TRUE)
+  wc_params <- wc_params %>% mutate(current_elo = replace_na(current_elo, median_elo))
+} else {
+  cat("All 48 WC teams have current Elo. OK\n")
 }
+
+cat("\n── WC teams: current Elo (top 10) ──\n")
+wc_params %>%
+  arrange(desc(current_elo)) %>%
+  select(group, team, attack, defence, current_elo) %>%
+  head(10) %>%
+  print()
 
 # ── 7. SPOT CHECKS ───────────────────────────────────────────────────────────
 
-cat("\n── Expected goals spot checks (neutral ground) ──\n")
+expected_goals <- function(team_a, team_b) {
+  a <- wc_params %>% filter(team == team_a)
+  b <- wc_params %>% filter(team == team_b)
+  xg_a <- exp(intercept + a$attack + b$defence +
+               elo_coef * (a$current_elo - b$current_elo) / 100)
+  xg_b <- exp(intercept + b$attack + a$defence +
+               elo_coef * (b$current_elo - a$current_elo) / 100)
+  tibble(team_a = team_a, team_b = team_b,
+         xg_a = round(xg_a, 3), xg_b = round(xg_b, 3))
+}
+
+cat("\n── Spot checks (neutral ground, with Elo) ──\n")
 print(expected_goals("England",   "France"))
 print(expected_goals("Argentina", "Brazil"))
 print(expected_goals("Germany",   "Spain"))
 print(expected_goals("Morocco",   "Scotland"))
 
-# ── 8. MAP WORLD CUP TEAM NAMES ──────────────────────────────────────────────
-#
-#  The Kaggle dataset uses its own naming conventions which don't always
-#  match official FIFA names. We create a lookup table mapping each WC team
-#  to its Kaggle name. The script will flag any mismatches so you can fix them.
-#
-#  GROUPS (from the December 2025 draw):
-#   A: Mexico, South Korea, South Africa, Czechia
-#   B: Canada, Switzerland, Qatar, Bosnia and Herzegovina
-#   C: Brazil, Morocco, Scotland, Haiti
-#   D: United States, Paraguay, Australia, Turkey
-#   E: Germany, Ecuador, Ivory Coast, Curaçao
-#   F: Netherlands, Japan, Tunisia, Sweden
-#   G: Belgium, Egypt, Iran, New Zealand
-#   H: Spain, Uruguay, Saudi Arabia, Cape Verde
-#   I: France, Senegal, Norway, Iraq
-#   J: Argentina, Algeria, Austria, Jordan
-#   K: Portugal, Colombia, Uzbekistan, DR Congo
-#   L: England, Croatia, Ghana, Panama
-
-wc_teams <- tribble(
-  ~group, ~team,
-  # Group A
-  "A", "Mexico",
-  "A", "South Korea",
-  "A", "South Africa",
-  "A", "Czech Republic",         # Kaggle uses Czech Republic, not Czechia
-  # Group B
-  "B", "Canada",
-  "B", "Switzerland",
-  "B", "Qatar",
-  "B", "Bosnia and Herzegovina", # CHECK: may be "Bosnia-Herzegovina" in data
-  # Group C
-  "C", "Brazil",
-  "C", "Morocco",
-  "C", "Scotland",
-  "C", "Haiti",
-  # Group D
-  "D", "United States",
-  "D", "Paraguay",
-  "D", "Australia",
-  "D", "Turkey",                 # Kaggle uses Turkey, not Türkiye
-  # Group E
-  "E", "Germany",
-  "E", "Ecuador",
-  "E", "Ivory Coast",
-  "E", "Curaçao",                # CHECK: may be "Curaçao" in data
-  # Group F
-  "F", "Netherlands",
-  "F", "Japan",
-  "F", "Tunisia",
-  "F", "Sweden",
-  # Group G
-  "G", "Belgium",
-  "G", "Egypt",
-  "G", "Iran",
-  "G", "New Zealand",
-  # Group H
-  "H", "Spain",
-  "H", "Uruguay",
-  "H", "Saudi Arabia",
-  "H", "Cape Verde",
-  # Group I
-  "I", "France",
-  "I", "Senegal",
-  "I", "Norway",
-  "I", "Iraq",
-  # Group J
-  "J", "Argentina",
-  "J", "Algeria",
-  "J", "Austria",
-  "J", "Jordan",
-  # Group K
-  "K", "Portugal",
-  "K", "Colombia",
-  "K", "Uzbekistan",
-  "K", "DR Congo",               # CHECK: may be "Congo DR" in data
-  # Group L
-  "L", "England",
-  "L", "Croatia",
-  "L", "Ghana",
-  "L", "Panama"
-)
-
-# Check which team names are found in our model
-cat("\n── World Cup team name check ──\n")
-wc_teams <- wc_teams %>%
-  mutate(in_model = team %in% team_params$team)
-
-found   <- sum(wc_teams$in_model)
-missing <- wc_teams %>% filter(!in_model) %>% pull(team)
-
-cat("Found in model:", found, "/ 48\n")
-
-if (length(missing) > 0) {
-  cat("\nNOT FOUND — fix the spelling to match the Kaggle dataset:\n")
-  cat(paste(" ✗", missing, collapse = "\n"), "\n")
-  cat("\nRun this to find the correct spelling:\n")
-  cat('  team_params %>% filter(str_detect(team, "Bosnia|Curacao|Congo")) %>% pull(team)\n')
-} else {
-  cat("All 48 teams found! ✓\n")
-}
-
-# ── 9. SAVE OUTPUTS ──────────────────────────────────────────────────────────
-
-write_csv(team_params, "data/team_params.csv")
-
-model_scalars <- tibble(intercept = intercept, home_adv = home_adv)
-write_csv(model_scalars, "data/model_scalars.csv")
-
-write_csv(wc_teams, "data/wc_teams.csv")
-
-cat("\n✓ Saved: data/team_params.csv\n")
-cat("✓ Saved: data/model_scalars.csv\n")
-cat("✓ Saved: data/wc_teams.csv\n")
-
-# ── 10. VISUALISE ────────────────────────────────────────────────────────────
-#
-#  Attack (α) vs Defence strength (-β) scatter for WC teams.
-#  We flip the defence axis so "better" = right and up on both axes:
-#   top-right  = elite (strong attack AND defence)  e.g. France, Spain
-#   top-left   = attack-heavy (scores a lot, concedes a lot)
-#   bottom-right = defensive (hard to score against, doesn't score much)
-#   bottom-left  = weaker teams
-
-wc_params <- team_params %>%
-  filter(team %in% wc_teams$team) %>%
-  left_join(wc_teams, by = "team")
+# ── 8. VISUALISE ─────────────────────────────────────────────────────────────
 
 p <- wc_params %>%
   ggplot(aes(x = -defence, y = attack, label = team)) +
-  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey60", alpha = 0.6) +
-  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey60", alpha = 0.6) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey70") +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey70") +
   geom_point(aes(colour = strength), size = 3, alpha = 0.85) +
   geom_text(size = 2.6, hjust = -0.12, vjust = 0.4, check_overlap = TRUE) +
-  scale_colour_gradient2(
-    low      = "#3182bd",
-    mid      = "#deebf7",
-    high     = "#e6550d",
-    midpoint = median(wc_params$strength),
-    name     = "Overall\nstrength"
-  ) +
-  labs(
-    title    = "2026 World Cup — Team Strengths",
-    subtitle = "Estimated from weighted international results (2018–2026) via Poisson GLM",
-    x        = "Defensive strength  →  (harder to score against)",
-    y        = "Attack strength  ↑  (scores more)",
-    caption  = "Parameters relative to baseline | Both axes: higher = better"
-  ) +
+  scale_colour_gradient2(low = "#3182bd", mid = "#deebf7", high = "#e6550d",
+                         midpoint = median(wc_params$strength, na.rm = TRUE),
+                         name = "Strength") +
+  labs(title    = "2026 World Cup - Team Strengths (v2: Poisson + Elo)",
+       subtitle = "Poisson GLM with Elo covariate, weighted 2018-2026",
+       x = "Defensive strength (harder to score against)",
+       y = "Attack strength (scores more)") +
   theme_minimal(base_size = 11) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 13),
-    plot.subtitle = element_text(colour = "grey40", size = 9),
-    plot.caption  = element_text(colour = "grey50", size = 8),
-    legend.position = "right"
-  )
+  theme(plot.title = element_text(face = "bold"))
 
 print(p)
-ggsave("plots/team_strengths.png", p, width = 13, height = 8, dpi = 150)
-cat("\n✓ Saved: plots/team_strengths.png\n")
+ggsave("plots/team_strengths_v2.png", p, width = 13, height = 8, dpi = 150)
+
+# ── 9. SAVE ──────────────────────────────────────────────────────────────────
+
+write_csv(team_params, "data/team_params.csv")
+write_csv(wc_params,   "data/wc_params.csv")
+write_csv(
+  tibble(intercept = intercept, home_adv = home_adv, elo_coef = elo_coef),
+  "data/model_scalars.csv"
+)
+
+cat("\n✓ Saved: data/team_params.csv\n")
+cat("✓ Saved: data/wc_params.csv\n")
+cat("✓ Saved: data/model_scalars.csv  (includes elo_coef)\n")
+cat("✓ Saved: plots/team_strengths_v2.png\n")

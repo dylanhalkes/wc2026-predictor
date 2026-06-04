@@ -1,126 +1,53 @@
 # ============================================================
 #  World Cup 2026 Predictor
-#  Step 1: Data Loading & Cleaning
-# ============================================================
-#
-#  Data source: Kaggle - "International football results from 1872 to 2024"
-#  by Mart Jürisoo. Download results.csv and place in the /data folder.
-#  https://www.kaggle.com/datasets/martj42/international-football-results
-#
-#  What this script does:
-#   1. Loads and briefly explores the raw data
-#   2. Filters to a relevant date range (2018 onwards)
-#   3. Assigns match type weights (World Cup matches > friendlies)
-#   4. Applies time decay (recent results matter more)
-#   5. Converts to long format ready for Poisson regression
-#   6. Saves cleaned output to data/model_data.csv
+#  Step 1: Data Loading & Cleaning  (v2 - with Elo ratings)
 # ============================================================
 
 library(tidyverse)
 
-# ── 1. LOAD DATA ─────────────────────────────────────────────────────────────
+# ── 1. LOAD RAW RESULTS ──────────────────────────────────────────────────────
 
-results_raw <- read_csv("data/results.csv")
-
-cat("── Raw data overview ──\n")
-cat("Rows:          ", nrow(results_raw), "\n")
-cat("Columns:       ", ncol(results_raw), "\n")
-cat("Date range:    ", format(min(results_raw$date)), "to",
-                       format(max(results_raw$date)), "\n")
-cat("Unique teams:  ", n_distinct(c(results_raw$home_team,
-                                    results_raw$away_team)), "\n\n")
-
-glimpse(results_raw)
-
-# ── 2. DATE FILTER ───────────────────────────────────────────────────────────
-#
-#  We keep from 2018-01-01 onwards. This captures:
-#   - The 2018 and 2022 World Cup cycles (qualifying + tournament)
-#   - Enough data per team to estimate attack/defence strengths reliably
-#   - Not so much old data that it distorts estimates for current squads
-#
-#  You can experiment with this cutoff later — try 2016 or 2020 and see
-#  how your final team strength estimates change.
-
-results_filtered <- results_raw %>%
-  filter(date >= as.Date("2018-01-01")) %>%
+results_raw <- read_csv("data/results.csv", show_col_types = FALSE) %>%
   mutate(date = as.Date(date))
 
-cat("── After date filter (2018 onwards) ──\n")
-cat("Matches remaining:", nrow(results_filtered), "\n\n")
+cat("── Raw data overview ──\n")
+cat("Rows:", nrow(results_raw), "| Date range:",
+    format(min(results_raw$date)), "to", format(max(results_raw$date)), "\n\n")
 
-# Preview the tournament types present — useful to check before weighting
-cat("── Tournament types in data ──\n")
-results_filtered %>%
-  count(tournament, sort = TRUE) %>%
-  print(n = 40)
+# ── 2. DATE FILTER ───────────────────────────────────────────────────────────
+
+results_filtered <- results_raw %>%
+  filter(date >= as.Date("2018-01-01"))
+
+cat("Matches from 2018 onwards:", nrow(results_filtered), "\n\n")
 
 # ── 3. MATCH TYPE WEIGHTS ────────────────────────────────────────────────────
-#
-#  Not all matches are equally informative. A team fielding reserves in a
-#  pre-tournament friendly tells us very little about their true strength.
-#  We assign a weight to each match type so the model reflects this.
-#
-#  Weight scale (rough guide):
-#   4.0 = FIFA World Cup match (highest signal)
-#   3.0 = Continental championship (Euros, Copa América, AFCON etc.)
-#   2.5 = World Cup qualifier
-#   2.0 = Continental qualifier / other competitive
-#   1.5 = UEFA Nations League (competitive but not major tournament)
-#   1.0 = Other (catch-all for minor tournaments)
-#   0.5 = Friendly (lowest signal)
 
 results_weighted <- results_filtered %>%
   mutate(
     match_weight = case_when(
       tournament == "FIFA World Cup"
-      ~ 4.0,
+        ~ 4.0,
       str_detect(tournament, regex("world cup qualification|world cup qualifier",
                                    ignore_case = TRUE))
-      ~ 2.5,
-      tournament %in% c("UEFA Euro",
-                        "Copa América",
-                        "African Cup of Nations",   # fixed
-                        "AFC Asian Cup",
-                        "Gold Cup",                  # fixed
-                        "OFC Nations Cup")
-      ~ 3.0,
-      str_detect(tournament, regex("qualification|qualifier",
-                                   ignore_case = TRUE))
-      ~ 2.0,
-      str_detect(tournament, regex("nations league",
-                                   ignore_case = TRUE))
-      ~ 1.5,
+        ~ 2.5,
+      tournament %in% c("UEFA Euro", "Copa America", "African Cup of Nations",
+                        "AFC Asian Cup", "Gold Cup", "OFC Nations Cup")
+        ~ 3.0,
+      str_detect(tournament, regex("qualification|qualifier", ignore_case = TRUE))
+        ~ 2.0,
+      str_detect(tournament, regex("nations league", ignore_case = TRUE))
+        ~ 1.5,
       tournament == "Friendly"
-      ~ 0.5,
-      TRUE
-      ~ 1.0
+        ~ 0.5,
+      TRUE ~ 1.0
     )
   )
 
-# Sanity check: make sure every tournament got mapped sensibly
-cat("\n── Match type weight distribution ──\n")
-results_weighted %>%
-  count(tournament, match_weight, sort = TRUE) %>%
-  print(n = 40)
-
 # ── 4. TIME DECAY ────────────────────────────────────────────────────────────
-#
-#  Squads, managers, and form all change over time. We want recent results
-#  to carry more weight than old ones. We use exponential decay:
-#
-#    time_weight = exp(-log(2) / half_life * days_ago)
-#
-#  With a half-life of 730 days (2 years):
-#   - A match from today:       weight = 1.00
-#   - A match from 1 year ago:  weight ≈ 0.71
-#   - A match from 2 years ago: weight ≈ 0.50
-#   - A match from 4 years ago: weight ≈ 0.25
-#
-#  The total weight for each observation is: match_weight × time_weight
 
 TOURNAMENT_START <- as.Date("2026-06-11")
-HALF_LIFE_DAYS   <- 730   # experiment with this: try 365 or 1095
+HALF_LIFE_DAYS   <- 730
 
 results_weighted <- results_weighted %>%
   mutate(
@@ -129,73 +56,131 @@ results_weighted <- results_weighted %>%
     total_weight = match_weight * time_weight
   )
 
-# Preview weight distribution
-cat("\n── Total weight summary ──\n")
-summary(results_weighted$total_weight)
-
 # ── 5. CONVERT TO LONG FORMAT ────────────────────────────────────────────────
-#
-#  The Poisson model we build in step 2 needs data in long format:
-#  one row per TEAM per MATCH (so each match becomes two rows).
-#
-#  Each row tells us: "team X scored Y goals against opponent Z,
-#  with home advantage = TRUE/FALSE, with this total weight."
-#
-#  Note on home advantage: if neutral = TRUE, neither team has home
-#  advantage (this is important for tournament matches, which are
-#  nearly all played on neutral ground — except for the host nations
-#  USA, Canada, and Mexico who may have a partial advantage).
 
 model_data <- bind_rows(
-
-  # Home team perspective
   results_weighted %>%
-    transmute(
-      date,
-      tournament,
-      team         = home_team,
-      opponent     = away_team,
-      goals        = home_score,
-      is_home      = !neutral,
-      total_weight
-    ),
-
-  # Away team perspective
+    transmute(date, tournament, team = home_team, opponent = away_team,
+              goals = home_score, is_home = !neutral, total_weight),
   results_weighted %>%
-    transmute(
-      date,
-      tournament,
-      team         = away_team,
-      opponent     = home_team,
-      goals        = away_score,
-      is_home      = FALSE,
-      total_weight
-    )
-
+    transmute(date, tournament, team = away_team, opponent = home_team,
+              goals = away_score, is_home = FALSE, total_weight)
 ) %>%
-  filter(!is.na(goals)) %>%   # remove unplayed fixtures
+  filter(!is.na(goals)) %>%
   arrange(date)
 
-# ── 6. SANITY CHECKS ─────────────────────────────────────────────────────────
+cat("Model data rows:", nrow(model_data),
+    "| Mean goals:", round(mean(model_data$goals), 3), "\n\n")
 
-cat("\n── Final model_data summary ──\n")
-cat("Total team-match rows:  ", nrow(model_data), "\n")
-cat("Unique teams:           ", n_distinct(model_data$team), "\n")
-cat("Date range:             ", format(min(model_data$date)), "to",
-                                format(max(model_data$date)), "\n")
-cat("Mean goals per row:     ", round(mean(model_data$goals), 3), "\n")
-cat("Home advantage rows:    ", sum(model_data$is_home), "\n\n")
+# ── 6. JOIN ELO RATINGS ──────────────────────────────────────────────────────
+#
+#  Source: elo_ratings_wc2026.csv (Kaggle - afonsofernandescruz)
+#  Coverage: 48 WC teams only, annual year-end snapshots 1901-2026
+#            plus one live pre-tournament snapshot per team.
+#
+#  Strategy: for each match in year Y, look up each team's year-end
+#  Elo from year Y-1. Non-WC opponents (not in the 48) are assigned
+#  the median Elo (~1650) so their contribution to elo_diff is neutral.
+#
+#  For the simulation all 48 WC teams have Elo, so coverage is perfect
+#  where it matters most.
 
-# Check a few specific teams to make sure they look right
-cat("── Sample: England observations ──\n")
+cat("Loading Elo ratings...\n")
+
+elo_raw <- read_csv("data/elo_ratings_wc2026.csv", show_col_types = FALSE)
+
+cat("Elo file columns:", paste(colnames(elo_raw), collapse = ", "), "\n")
+cat("Elo file rows:", nrow(elo_raw), "\n\n")
+
+# Name mapping: Elo dataset uses modern/official names; results.csv uses
+# traditional English names. Map Elo names -> results.csv names.
+elo_name_map <- c(
+  "Czechia"              = "Czech Republic",
+  "United States"        = "United States",          # same
+  "South Korea"          = "South Korea",            # same
+  "DR Congo"             = "DR Congo",               # same
+  "Bosnia and Herzegovina" = "Bosnia and Herzegovina", # same
+  "Turkey"               = "Turkey",                 # same
+  "Ivory Coast"          = "Ivory Coast",            # same
+  "Curacao"              = "Curacao"                 # same
+)
+
+# Apply name mapping (only Czechia actually differs)
+elo_raw <- elo_raw %>%
+  mutate(team = ifelse(country %in% names(elo_name_map),
+                       elo_name_map[country],
+                       country))
+
+# Year-end snapshots only (snapshot_date ends in "12-31")
+elo_annual <- elo_raw %>%
+  filter(str_detect(as.character(snapshot_date), "12-31")) %>%
+  select(team, year, rating) %>%
+  arrange(team, year)
+
+cat("Year-end Elo snapshots:", nrow(elo_annual), "\n")
+cat("Year range:", min(elo_annual$year), "to", max(elo_annual$year), "\n\n")
+
+# Current (pre-tournament) Elo: most recent snapshot per team
+current_elo <- elo_raw %>%
+  group_by(team) %>%
+  slice_max(as.Date(as.character(snapshot_date)), n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(team, current_elo = rating)
+
+cat("Current Elo loaded for", nrow(current_elo), "teams.\n\n")
+
+# For each match in year Y, use year Y-1 Elo
+# (year-end Elo is a pre-season proxy for the following year's matches)
+model_data <- model_data %>%
+  mutate(elo_lookup_year = as.integer(format(date, "%Y")) - 1L)
+
+# Join team Elo
+model_data <- model_data %>%
+  left_join(
+    elo_annual %>% rename(elo_team = rating),
+    by = c("team" = "team", "elo_lookup_year" = "year")
+  )
+
+# Join opponent Elo
+model_data <- model_data %>%
+  left_join(
+    elo_annual %>% rename(elo_opp = rating),
+    by = c("opponent" = "team", "elo_lookup_year" = "year")
+  )
+
+# Non-WC teams get median Elo (neutral effect on elo_diff)
+median_elo <- median(elo_annual$rating, na.rm = TRUE)
+cat("Median Elo (used for non-WC opponents):", round(median_elo), "\n")
+
+n_missing_team <- sum(is.na(model_data$elo_team))
+n_missing_opp  <- sum(is.na(model_data$elo_opp))
+cat("Rows missing team Elo:", n_missing_team, "(", round(n_missing_team/nrow(model_data)*100,1), "%)\n")
+cat("Rows missing opp Elo: ", n_missing_opp,  "(", round(n_missing_opp/nrow(model_data)*100,1), "%)\n\n")
+
+model_data <- model_data %>%
+  mutate(
+    elo_team = replace_na(elo_team, median_elo),
+    elo_opp  = replace_na(elo_opp,  median_elo),
+    elo_diff = (elo_team - elo_opp) / 100
+  ) %>%
+  select(-elo_lookup_year)
+
+cat("── Elo difference summary (per 100 Elo points) ──\n")
+print(summary(model_data$elo_diff))
+
+cat("\n── England sample (most recent 8 matches) ──\n")
 model_data %>%
   filter(team == "England") %>%
   arrange(desc(date)) %>%
-  select(date, tournament, team, opponent, goals, is_home, total_weight) %>%
-  print(n = 15)
+  select(date, opponent, goals, elo_team, elo_opp, elo_diff) %>%
+  head(8) %>%
+  mutate(across(where(is.numeric), ~round(.x, 2))) %>%
+  print()
 
 # ── 7. SAVE ──────────────────────────────────────────────────────────────────
 
-write_csv(model_data, "data/model_data.csv")
-cat("\n✓ Saved cleaned data to data/model_data.csv\n")
-cat("  Rows:", nrow(model_data), "| Columns:", ncol(model_data), "\n")
+write_csv(model_data,  "data/model_data.csv")
+write_csv(current_elo, "data/current_elo.csv")
+
+cat("\n✓ Saved data/model_data.csv  |", nrow(model_data), "rows\n")
+cat("✓ Saved data/current_elo.csv |", nrow(current_elo), "teams\n")
