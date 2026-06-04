@@ -52,11 +52,27 @@ cat("Building lambda matrix with Elo adjustment...\n")
 elo_vec      <- wc_full$current_elo
 elo_diff_mat <- outer(elo_vec, elo_vec, "-") / 100   # (elo_i - elo_j)/100
 
+# Host nation partial home advantage (USA, Canada, Mexico)
+# All WC matches are coded neutral but hosts get ~half the standard home boost
+HOST_ADVANTAGE <- home_adv * 0.5
+hosts <- c("United States", "Canada", "Mexico")
+host_idx <- which(TEAMS %in% hosts)
+
 lambda_mat <- exp(
   outer(wc_full$attack, wc_full$defence, "+") + intercept +
-  elo_coef * elo_diff_mat
+    elo_coef * elo_diff_mat
 )
+
+# Apply host advantage: multiply host teams' attacking lambda by exp(HOST_ADVANTAGE)
+# This scales up expected goals when a host team is the "home" side
+for (h in host_idx) {
+  lambda_mat[h, ] <- lambda_mat[h, ] * exp(HOST_ADVANTAGE)
+}
+
 diag(lambda_mat) <- 0
+
+
+
 
 cat("Setup complete. N =", N, "teams.\n\n")
 

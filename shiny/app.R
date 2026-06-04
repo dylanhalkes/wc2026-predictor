@@ -1,5 +1,6 @@
 # ============================================================
-#  World Cup 2026 Predictor - Shiny Dashboard  (v2 - with Elo)
+#  World Cup 2026 Predictor - Shiny Dashboard
+#  v3: Poisson GLM + Elo + Dixon-Coles correction
 #  File: shiny/app.R
 #  Run: shiny::runApp("shiny")
 # ============================================================
@@ -16,8 +17,8 @@ sim_results <- read_csv("../data/simulation_results.csv", show_col_types = FALSE
 intercept <- model_scl$intercept
 home_adv  <- model_scl$home_adv
 elo_coef  <- model_scl$elo_coef
+rho_dc    <- model_scl$rho_dc    # Dixon-Coles correction
 
-# Master table: group + model params + current Elo + simulation probabilities
 wc_full <- wc_params %>%
   left_join(
     sim_results %>% select(team, p_win, p_final, p_semi, p_quarter, p_r16, p_r32),
@@ -29,29 +30,46 @@ team_choices <- sort(unique(wc_full$team))
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
+# Dixon-Coles tau correction for low-score cells
+tau_dc <- function(x, y, mu, nu, rho) {
+  case_when(
+    x == 0 & y == 0 ~ 1 - mu * nu * rho,
+    x == 0 & y == 1 ~ 1 + mu * rho,
+    x == 1 & y == 0 ~ 1 + nu * rho,
+    x == 1 & y == 1 ~ 1 - rho,
+    TRUE ~ 1
+  )
+}
+
+# DC-corrected scoreline probability grid
+score_grid_dc <- function(xg_a, xg_b, rho, max_g = 6) {
+  expand.grid(goals_a = 0:max_g, goals_b = 0:max_g) %>%
+    mutate(
+      prob_raw = dpois(goals_a, xg_a) * dpois(goals_b, xg_b) *
+                 tau_dc(goals_a, goals_b, xg_a, xg_b, rho),
+      prob     = prob_raw / sum(prob_raw)   # normalise to sum to 1
+    ) %>%
+    select(goals_a, goals_b, prob)
+}
+
+# Match probabilities using DC-corrected score grid
 calc_match <- function(team_a, team_b) {
   a <- wc_full %>% filter(team == team_a)
   b <- wc_full %>% filter(team == team_b)
 
-  # Expected goals including Elo adjustment
   xg_a <- exp(intercept + a$attack + b$defence +
                elo_coef * (a$current_elo - b$current_elo) / 100)
   xg_b <- exp(intercept + b$attack + a$defence +
                elo_coef * (b$current_elo - a$current_elo) / 100)
 
-  max_g  <- 15
-  p_win  <- sum(sapply(0:max_g, function(g) dpois(g, xg_a) * ppois(g - 1, xg_b)))
-  p_draw <- sum(dpois(0:max_g, xg_a) * dpois(0:max_g, xg_b))
-  p_loss <- 1 - p_win - p_draw
+  grid   <- score_grid_dc(xg_a, xg_b, rho_dc)
+  p_win  <- sum(grid$prob[grid$goals_a >  grid$goals_b])
+  p_draw <- sum(grid$prob[grid$goals_a == grid$goals_b])
+  p_loss <- sum(grid$prob[grid$goals_a <  grid$goals_b])
 
-  list(xg_a = xg_a, xg_b = xg_b,
+  list(xg_a  = xg_a,  xg_b  = xg_b,
        elo_a = a$current_elo, elo_b = b$current_elo,
        p_win = p_win, p_draw = p_draw, p_loss = p_loss)
-}
-
-score_grid <- function(xg_a, xg_b, max_g = 6) {
-  expand.grid(goals_a = 0:max_g, goals_b = 0:max_g) %>%
-    mutate(prob = dpois(goals_a, xg_a) * dpois(goals_b, xg_b))
 }
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -76,7 +94,7 @@ ui <- fluidPage(
 
   div(class = "page-header",
     h2("2026 FIFA World Cup Predictor"),
-    p("Poisson GLM + Elo ratings · Weighted international results 2018-2026 · 50,000 Monte Carlo simulations")
+    p("Poisson GLM + Elo ratings + Dixon-Coles correction  |  50,000 Monte Carlo simulations")
   ),
 
   tabsetPanel(
@@ -161,7 +179,7 @@ server <- function(input, output, session) {
       coord_flip(clip = "off") +
       scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
       labs(title    = title,
-           subtitle = "50,000 Monte Carlo simulations · Poisson GLM + Elo (2018-2026)",
+           subtitle = "50,000 simulations  |  Poisson GLM + Elo + Dixon-Coles",
            x = NULL, y = label, fill = "Group") +
       theme_minimal(base_size = 12) +
       theme(plot.title    = element_text(face = "bold", size = 14),
@@ -240,13 +258,14 @@ server <- function(input, output, session) {
 
   output$score_heatmap <- renderPlot({
     m <- match_rv()
-    score_grid(m$xg_a, m$xg_b) %>%
+    # Uses Dixon-Coles corrected probabilities
+    score_grid_dc(m$xg_a, m$xg_b, rho_dc) %>%
       ggplot(aes(x = factor(goals_b), y = factor(goals_a), fill = prob * 100)) +
       geom_tile(colour = "white", linewidth = 0.6) +
       geom_text(aes(label = paste0(round(prob * 100, 1), "%")),
                 size = 3.2, colour = "grey20") +
       scale_fill_gradient(low = "#f7fbff", high = "#2166ac", name = "Prob (%)") +
-      labs(title = "Scoreline Probabilities",
+      labs(title   = "Scoreline Probabilities (Dixon-Coles corrected)",
            x = paste(input$team_b, "goals"),
            y = paste(input$team_a, "goals")) +
       theme_minimal(base_size = 11) +
@@ -267,10 +286,9 @@ server <- function(input, output, session) {
                             name = "Win prob (%)") +
       scale_size(range = c(2, 9), guide = "none") +
       labs(title    = "2026 World Cup - Team Strengths",
-           subtitle = "Poisson GLM + Elo · point size proportional to win probability",
-           x        = "Defensive strength (harder to score against)",
-           y        = "Attack strength (scores more)",
-           caption  = "Parameters relative to baseline | Both axes: higher = better") +
+           subtitle = "Poisson GLM + Elo  |  point size proportional to win probability",
+           x = "Defensive strength (harder to score against)",
+           y = "Attack strength (scores more)") +
       theme_minimal(base_size = 11) +
       theme(plot.title    = element_text(face = "bold", size = 13),
             plot.subtitle = element_text(colour = "grey50", size = 9))
