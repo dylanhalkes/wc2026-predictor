@@ -1,0 +1,49 @@
+group,team,in_model
+A,Mexico,TRUE
+A,South Korea,TRUE
+A,South Africa,TRUE
+A,Czech Republic,TRUE
+B,Canada,TRUE
+B,Switzerland,TRUE
+B,Qatar,TRUE
+B,Bosnia and Herzegovina,TRUE
+C,Brazil,TRUE
+C,Morocco,TRUE
+C,Scotland,TRUE
+C,Haiti,TRUE
+D,United States,TRUE
+D,Paraguay,TRUE
+D,Australia,TRUE
+D,Turkey,TRUE
+E,Germany,TRUE
+E,Ecuador,TRUE
+E,Ivory Coast,TRUE
+E,Curaçao,TRUE
+F,Netherlands,TRUE
+F,Japan,TRUE
+F,Tunisia,TRUE
+F,Sweden,TRUE
+G,Belgium,TRUE
+G,Egypt,TRUE
+G,Iran,TRUE
+G,New Zealand,TRUE
+H,Spain,TRUE
+H,Uruguay,TRUE
+H,Saudi Arabia,TRUE
+H,Cape Verde,TRUE
+I,France,TRUE
+I,Senegal,TRUE
+I,Norway,TRUE
+I,Iraq,TRUE
+J,Argentina,TRUE
+J,Algeria,TRUE
+J,Austria,TRUE
+J,Jordan,TRUE
+K,Portugal,TRUE
+K,Colombia,TRUE
+K,Uzbekistan,TRUE
+K,DR Congo,TRUE
+L,England,TRUE
+L,Croatia,TRUE
+L,Ghana,TRUE
+L,Panama,TRUE
