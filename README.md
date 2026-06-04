@@ -11,12 +11,12 @@ An interactive Shiny dashboard allows users to explore the predictions, simulate
 ## Methodology
 
 ### Data
-International football results from 1872 to 2026 (Kaggle — Mart Jürisoo), filtered to matches from January 2018 onwards to capture the last two World Cup qualifying cycles. Raw data comprises ~8,000 matches across 284 nations.
+International football results from 1872 to 2026 (Kaggle - Mart Jürisoo), filtered to matches from January 2018 onwards to capture the last two World Cup qualifying cycles. Raw data comprises ~8,000 matches across 284 nations.
 
 ### Match Weighting
 Not all matches carry equal information. A two-dimensional weighting scheme is applied to each observation:
 
-**Match type weight** — reflects competitive importance:
+**Match type weight** - reflects competitive importance:
 | Tournament | Weight |
 |---|---|
 | FIFA World Cup | 4.0 |
@@ -26,7 +26,7 @@ Not all matches carry equal information. A two-dimensional weighting scheme is a
 | UEFA Nations League / CONCACAF Nations League | 1.5 |
 | Friendly | 0.5 |
 
-**Time decay weight** — recent results carry more weight via exponential decay with a two-year half-life:
+**Time decay weight** - recent results carry more weight via exponential decay with a two-year half-life:
 
 $$w_t = e^{-\frac{\ln 2}{730} \cdot d}$$
 
@@ -55,17 +55,17 @@ The model is fitted as a weighted Poisson GLM using base R's `glm()`. With ~16,0
 ### Monte Carlo Simulation
 The full 48-team tournament is simulated 50,000 times:
 
-1. **Group stage** — all six round-robin matches per group simulated by drawing independently from $\text{Poisson}(\lambda_{ij})$ and $\text{Poisson}(\lambda_{ji})$. Teams ranked by points → goal difference → goals scored → random draw.
-2. **Third-place selection** — all 12 third-placed teams ranked; best 8 advance. Rankings use the same tiebreaker hierarchy.
-3. **Round of 32** — bracket assembled using FIFA's official Annex C structure. The 8 fixed runner-up matchups are hardcoded; the 8 group-winner-vs-third-place matchups use a constraint-satisfaction algorithm (minimum remaining values) to assign third-place teams to their eligible opponent slots.
-4. **Knockout rounds** — match outcomes drawn from Poisson distributions. Draws resolved by a penalty shootout, modelled as a Bernoulli trial with success probability proportional to each team's expected goals in that match.
-5. **Results aggregated** — win, finalist, semi-final, quarter-final, R16, and R32 probabilities computed across all 50,000 iterations.
+1. **Group stage** - all six round-robin matches per group simulated by drawing independently from $\text{Poisson}(\lambda_{ij})$ and $\text{Poisson}(\lambda_{ji})$. Teams ranked by points → goal difference → goals scored → random draw.
+2. **Third-place selection** - all 12 third-placed teams ranked; best 8 advance. Rankings use the same tiebreaker hierarchy.
+3. **Round of 32** - bracket assembled using FIFA's official Annex C structure. The 8 fixed runner-up matchups are hardcoded; the 8 group-winner-vs-third-place matchups use a constraint-satisfaction algorithm (minimum remaining values) to assign third-place teams to their eligible opponent slots.
+4. **Knockout rounds** - match outcomes drawn from Poisson distributions. Draws resolved by a penalty shootout, modelled as a Bernoulli trial with success probability proportional to each team's expected goals in that match.
+5. **Results aggregated** - win, finalist, semi-final, quarter-final, R16, and R32 probabilities computed across all 50,000 iterations.
 
 Standard error of probability estimates at 50,000 simulations: ±0.18 percentage points for a team with ~20% win probability.
 
 ---
 
-## Results (v1 — Poisson GLM baseline)
+## Results (v1 - Poisson GLM baseline)
 
 Pre-tournament predictions published **4 June 2026**, one week before kick-off.
 
@@ -86,15 +86,15 @@ Pre-tournament predictions published **4 June 2026**, one week before kick-off.
 - Spain's model-implied dominance reflects both exceptional attack (highest $\alpha$ among WC teams) and elite defensive solidity, combined with a favourable Group H bracket path
 - England's 14.1% win probability is notably high relative to their FIFA ranking; the model rewards their consistent high-scoring recent qualifying campaign
 - Germany and Belgium show high quarter-final probabilities (46.7% and 40.8%) but comparatively low win probabilities (5.1% and 2.9%), reflecting bracket paths that route them into stronger opposition in the later rounds
-- France's win probability (7.9%) sits below their FIFA world ranking (#1), as the model weights recent performance over accumulated ranking points — Spain's recent form has been more dominant
+- France's win probability (7.9%) sits below their FIFA world ranking (#1), as the model weights recent performance over accumulated ranking points - Spain's recent form has been more dominant
 
 ---
 
 ## Planned Improvements (v2)
 
-- **Elo ratings prior** — incorporating eloratings.net team strength ratings to improve parameter estimates for data-sparse nations (Jordan, Haiti, Curaçao) where the current model has limited historical match data
-- **Dixon-Coles correction** — low-score adjustment to better capture the frequency of 0-0 and 1-0 scorelines, which the standard Poisson model slightly underestimates
-- **Calibration analysis** — post-tournament comparison of predicted vs actual outcomes across all 104 matches
+- **Elo ratings prior** - incorporating eloratings.net team strength ratings to improve parameter estimates for data-sparse nations (Jordan, Haiti, Curaçao) where the current model has limited historical match data
+- **Dixon-Coles correction** - low-score adjustment to better capture the frequency of 0-0 and 1-0 scorelines, which the standard Poisson model slightly underestimates
+- **Calibration analysis** - post-tournament comparison of predicted vs actual outcomes across all 104 matches
 
 ---
 
@@ -138,4 +138,4 @@ Built with R 4.5.2. Key packages: `tidyverse`, `shiny`, `broom`. Full dependency
 
 ---
 
-*Loughborough University · Mathematics with Statistics BSc · Final Year Project*
+*Loughborough University · Mathematics with Statistics BSc*
