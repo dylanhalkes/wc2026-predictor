@@ -4,6 +4,8 @@ A Monte Carlo tournament simulator for the 2026 FIFA World Cup, built in R. The 
 
 An interactive Shiny dashboard allows users to explore predictions, simulate individual matchups, and view Dixon-Coles adjusted scoreline probability heat maps.
 
+**Live dashboard:** https://dylanhalkes.shinyapps.io/shiny
+
 > **Status:** v2 predictions live (Poisson GLM + Elo ratings + Dixon-Coles correction + host nation advantage). Tournament starts 11 June 2026.
 
 ---

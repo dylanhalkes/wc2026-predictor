@@ -10,9 +10,9 @@ library(tidyverse)
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 
-model_scl   <- read_csv("../data/model_scalars.csv",      show_col_types = FALSE)
-wc_params   <- read_csv("../data/wc_params.csv",          show_col_types = FALSE)
-sim_results <- read_csv("../data/simulation_results.csv", show_col_types = FALSE)
+model_scl   <- read_csv("model_scalars.csv",      show_col_types = FALSE)
+wc_params   <- read_csv("wc_params.csv",          show_col_types = FALSE)
+sim_results <- read_csv("simulation_results.csv", show_col_types = FALSE)
 
 intercept <- model_scl$intercept
 home_adv  <- model_scl$home_adv

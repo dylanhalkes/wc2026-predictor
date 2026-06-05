@@ -1,0 +1,10 @@
+name: shiny
+title:
+username: dylanhalkes
+account: dylanhalkes
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17472734
+bundleId: 12088293
+url: https://dylanhalkes.shinyapps.io/shiny/
+version: 1
