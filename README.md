@@ -103,7 +103,6 @@ The top five teams are stable across both model versions (within 1–2 percentag
 ## Planned Improvements
 
 - **Post-tournament calibration analysis** — comparing predicted vs actual outcomes across all 104 matches to assess model accuracy
-- **Dixon-Coles correction in simulation engine** — currently applied to individual match probabilities in the dashboard; extending to the Monte Carlo loop would further improve scoreline-level accuracy
 
 ---
 
